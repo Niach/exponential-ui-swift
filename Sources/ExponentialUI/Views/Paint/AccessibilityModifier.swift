@@ -113,6 +113,34 @@ struct A11yInfo: Equatable {
             info.passthrough = true
             info.adjustable = "spinbutton"
             return info
+        case ("VoiceWave", nil):
+            // NEW-77 (a11y.json): one img named by `label` with the activity
+            // appended; decorative without a label; the child never reads.
+            let name = a.label ?? n.props.str("label")
+            guard !name.isEmpty else {
+                info.hidden = true
+                return info
+            }
+            let activity = VoiceWaveFrame.activity(n.props.str("activity"))
+            info.label = "\(name), \(activity)"
+            info.traits = .isImage
+            return info
+        case ("QrCode", _):
+            // VAPP-162 (a11y.json): an img named by `label`; decorative
+            // without one; never focusable.
+            let name = a.label ?? n.props.str("label")
+            guard !name.isEmpty else {
+                info.hidden = true
+                return info
+            }
+            info.label = name
+            info.traits = .isImage
+            return info
+        case ("QrScanner", _):
+            // VAPP-162: the viewfinder names itself (`QrScannerLeaf`: the
+            // label, `cameraUnavailable` appended while no camera shows).
+            info.passthrough = true
+            return info
         default:
             break
         }

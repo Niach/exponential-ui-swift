@@ -2198,6 +2198,17 @@ public protocol SurfaceProtocol: AnyObject, Sendable {
     func failingChecks(id: String)  -> [String]
     
     /**
+     * VAPP-162: one input on a `hold: true` Button (round-5 contract §9).
+     * `input_json` = `{"do": "pointerdown"|"pointermove"|"pointerup", x, y}`
+     * (px relative to the button's top-left), `{"do": "pointercancel"}`,
+     * `{"do": "keydown", key, repeat?}`, `{"do": "keyup", key}` or
+     * `{"do": "blur"}`. Fires holdStart / holdEnd / holdCancel; while held
+     * the node's states carry `pressed` and its `label` prop is the
+     * `holdingLabel` (a Relayout event follows).
+     */
+    func hold(index: UInt32, inputJson: String) throws  -> [FfiEvent]
+    
+    /**
      * A `hoverTimer` event fired (`{owner, delay_ms}`): close that hover
      * overlay unless its trigger or content is hovered again.
      */
@@ -2206,6 +2217,11 @@ public protocol SurfaceProtocol: AnyObject, Sendable {
     func indexOf(id: String)  -> UInt32?
     
     func invalidateMeasures() 
+    
+    /**
+     * VAPP-162: whether a `hold` Button is held now.
+     */
+    func isHeld(id: String)  -> Bool
     
     func issuesJson()  -> String
     
@@ -2620,6 +2636,25 @@ open func failingChecks(id: String) -> [String]  {
 }
     
     /**
+     * VAPP-162: one input on a `hold: true` Button (round-5 contract §9).
+     * `input_json` = `{"do": "pointerdown"|"pointermove"|"pointerup", x, y}`
+     * (px relative to the button's top-left), `{"do": "pointercancel"}`,
+     * `{"do": "keydown", key, repeat?}`, `{"do": "keyup", key}` or
+     * `{"do": "blur"}`. Fires holdStart / holdEnd / holdCancel; while held
+     * the node's states carry `pressed` and its `label` prop is the
+     * `holdingLabel` (a Relayout event follows).
+     */
+open func hold(index: UInt32, inputJson: String)throws  -> [FfiEvent]  {
+    return try  FfiConverterSequenceTypeFfiEvent.lift(try rustCallWithError(FfiConverterTypeUiError_lift) {
+    uniffi_exponential_ui_ffi_fn_method_surface_hold(
+            self.uniffiCloneHandle(),
+        FfiConverterUInt32.lower(index),
+        FfiConverterString.lower(inputJson),$0
+    )
+})
+}
+    
+    /**
      * A `hoverTimer` event fired (`{owner, delay_ms}`): close that hover
      * overlay unless its trigger or content is hovered again.
      */
@@ -2646,6 +2681,18 @@ open func invalidateMeasures()  {try! rustCall() {
             self.uniffiCloneHandle(),$0
     )
 }
+}
+    
+    /**
+     * VAPP-162: whether a `hold` Button is held now.
+     */
+open func isHeld(id: String) -> Bool  {
+    return try!  FfiConverterBool.lift(try! rustCall() {
+    uniffi_exponential_ui_ffi_fn_method_surface_is_held(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(id),$0
+    )
+})
 }
     
 open func issuesJson() -> String  {
@@ -7182,6 +7229,21 @@ public func placeOverlay(anchorX: Double, anchorY: Double, anchorW: Double, anch
 })
 }
 /**
+ * VAPP-162: the QrCode matrix (the core's port of Nayuki's generator,
+ * `fixtures/qr-code.json`). `level` = `L`|`M`|`Q`|`H` (anything else is
+ * `M`); the result is `{size, version, mask, rows}` (`rows` = `size`
+ * strings of '1' dark / '0' light, no quiet zone) or `null` (an empty
+ * value, or one version 40 cannot hold at that level).
+ */
+public func qrMatrixJson(value: String, level: String) -> String  {
+    return try!  FfiConverterString.lift(try! rustCall() {
+    uniffi_exponential_ui_ffi_fn_func_qr_matrix_json(
+        FfiConverterString.lower(value),
+        FfiConverterString.lower(level),$0
+    )
+})
+}
+/**
  * Reduce the nested authoring form → `{root, issues}` JSON.
  */
 public func reduceNestedJson(nestedJson: String, catalogId: String, extensionsJson: String?)throws  -> String  {
@@ -7288,6 +7350,29 @@ public func runActionJson(actionJson: String, dataJson: String, scope: String, s
 })
 }
 /**
+ * VAPP-162: a Segmented `bar` item's count badge text (`99+` above 99);
+ * `None` = no badge (unset, not positive, 0).
+ */
+public func segmentedBadgeText(count: Double?) -> String?  {
+    return try!  FfiConverterOptionString.lift(try! rustCall() {
+    uniffi_exponential_ui_ffi_fn_func_segmented_badge_text(
+        FfiConverterOptionDouble.lower(count),$0
+    )
+})
+}
+/**
+ * VAPP-122: `source` with `params` (a JSON object, or null) appended as
+ * its query, for the `bind` action (`sourceWithParams`).
+ */
+public func sourceWithParamsJson(source: String, paramsJson: String?) -> String  {
+    return try!  FfiConverterString.lift(try! rustCall() {
+    uniffi_exponential_ui_ffi_fn_func_source_with_params_json(
+        FfiConverterString.lower(source),
+        FfiConverterOptionString.lower(paramsJson),$0
+    )
+})
+}
+/**
  * The built-in strings with `overrides_json` merged over them.
  */
 public func stringTableJson(overridesJson: String?)throws  -> String  {
@@ -7378,6 +7463,18 @@ public func validatePackageJson(packageJson: String, catalogIds: [String]?)throw
 })
 }
 /**
+ * VAPP-122: a record (JSON) against its kind's schema (JSON): the issues
+ * `[{path, message}]` as JSON.
+ */
+public func validateRecordJson(schemaJson: String, dataJson: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeUiError_lift) {
+    uniffi_exponential_ui_ffi_fn_func_validate_record_json(
+        FfiConverterString.lower(schemaJson),
+        FfiConverterString.lower(dataJson),$0
+    )
+})
+}
+/**
  * The issues of a style object (`[{path, message}]`).
  */
 public func validateStyleJson(styleJson: String, root: Bool?)throws  -> String  {
@@ -7394,6 +7491,31 @@ public func validateStyleJson(styleJson: String, root: Bool?)throws  -> String  
 public func version() -> String  {
     return try!  FfiConverterString.lift(try! rustCall() {
     uniffi_exponential_ui_ffi_fn_func_version($0
+    )
+})
+}
+/**
+ * VAPP-162: the VoiceWave `variant: bars` meter for one frame. `input_json`
+ * = `{size: "sm"|"md"|"lg"|"xl", activity, level?, bands?, elapsed?,
+ * reducedMotion?}`; the result is `{width, height, phase, bars: [{x, y,
+ * width, height, radius}]}` (px from the meter's top-left; `{}` on bad input).
+ */
+public func voiceWaveBarsJson(inputJson: String) -> String  {
+    return try!  FfiConverterString.lift(try! rustCall() {
+    uniffi_exponential_ui_ffi_fn_func_voice_wave_bars_json(
+        FfiConverterString.lower(inputJson),$0
+    )
+})
+}
+/**
+ * NEW-77: the VoiceWave rings for one frame. `input_json` =
+ * `{size, activity, level?, bands?, elapsed?, reducedMotion?}`; the result
+ * is `{rings: [{part, points, fillAlpha, strokeAlpha, strokeWidth}], childSize, phase}`.
+ */
+public func voiceWaveJson(inputJson: String) -> String  {
+    return try!  FfiConverterString.lift(try! rustCall() {
+    uniffi_exponential_ui_ffi_fn_func_voice_wave_json(
+        FfiConverterString.lower(inputJson),$0
     )
 })
 }
@@ -7543,6 +7665,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_exponential_ui_ffi_checksum_func_place_overlay() != 44395) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_exponential_ui_ffi_checksum_func_qr_matrix_json() != 21220) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_exponential_ui_ffi_checksum_func_reduce_nested_json() != 7405) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -7565,6 +7690,12 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_exponential_ui_ffi_checksum_func_run_action_json() != 39985) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_exponential_ui_ffi_checksum_func_segmented_badge_text() != 31695) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_exponential_ui_ffi_checksum_func_source_with_params_json() != 2808) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_exponential_ui_ffi_checksum_func_string_table_json() != 50623) {
@@ -7591,10 +7722,19 @@ private let initializationResult: InitializationResult = {
     if (uniffi_exponential_ui_ffi_checksum_func_validate_package_json() != 13412) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_exponential_ui_ffi_checksum_func_validate_record_json() != 49853) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_exponential_ui_ffi_checksum_func_validate_style_json() != 34628) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_exponential_ui_ffi_checksum_func_version() != 37022) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_exponential_ui_ffi_checksum_func_voice_wave_bars_json() != 38122) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_exponential_ui_ffi_checksum_func_voice_wave_json() != 6478) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_exponential_ui_ffi_checksum_func_week_start() != 43637) {
@@ -7690,6 +7830,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_exponential_ui_ffi_checksum_method_surface_failing_checks() != 25004) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_exponential_ui_ffi_checksum_method_surface_hold() != 13037) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_exponential_ui_ffi_checksum_method_surface_hover_timeout() != 3003) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -7697,6 +7840,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_exponential_ui_ffi_checksum_method_surface_invalidate_measures() != 22083) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_exponential_ui_ffi_checksum_method_surface_is_held() != 7625) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_exponential_ui_ffi_checksum_method_surface_issues_json() != 12552) {
