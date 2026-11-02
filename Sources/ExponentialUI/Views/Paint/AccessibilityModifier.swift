@@ -80,6 +80,8 @@ struct A11yInfo: Equatable {
         case ("Box", "indicator"): return "tablist"
         case ("List", "divider"): return "hidden"
         case ("Box", _) where n.pressable: return "button"
+        // EXP-1605: a Motion with `on.press` is a button.
+        case ("Motion", _) where n.pressable: return "button"
         default: break
         }
         if n.part == nil {
@@ -125,8 +127,13 @@ struct A11yInfo: Equatable {
             info.label = "\(name), \(activity)"
             info.traits = .isImage
             return info
-        case ("QrCode", _):
-            // VAPP-162 (a11y.json): an img named by `label`; decorative
+        case ("Motion", _) where n.pressable:
+            // EXP-1605 (a11y.json): with `on.press` a button named by `label`.
+            info.label = a.label ?? n.props.str("label")
+            info.traits = .isButton
+            return info
+        case ("QrCode", _), ("Motion", _):
+            // VAPP-162, EXP-1604 (a11y.json): an img named by `label`; decorative
             // without one; never focusable.
             let name = a.label ?? n.props.str("label")
             guard !name.isEmpty else {
@@ -135,6 +142,12 @@ struct A11yInfo: Equatable {
             }
             info.label = name
             info.traits = .isImage
+            return info
+        case ("ZoomableImage", _):
+            // EXP-1586 (a11y.json): the picture is an adjustable img named
+            // by `alt` with the percent as its value, the pill's buttons
+            // name themselves (`ZoomableImageView`, `ZoomPill`).
+            info.passthrough = true
             return info
         case ("QrScanner", _):
             // VAPP-162: the viewfinder names itself (`QrScannerLeaf`: the

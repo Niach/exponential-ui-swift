@@ -191,11 +191,19 @@ struct TableCellLeaf: View {
                     .padding(.horizontal, 8)
                     .background(cx.themeColor("secondary") ?? cx.themeColor("muted") ?? cx.ink.opacity(0.1), in: Capsule())
             default:
-                TextLabel(text(value), cx.textStyle, color: cx.ink, align: textAlign, lines: 1)
-                    .frame(height: cx.textStyle.lineHeight)
+                // EXP-1548: the lines as measured (wrapped; one with an
+                // ellipsis in a `truncate` column), centred in the row like
+                // gpui and the web's `align-items: center`.
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(TextLeaf.shown(text(value), cx.textStyle, width: cx.inner.width, clamp: cx.node.lines).enumerated()), id: \.offset) { _, line in
+                        TextLabel(line, cx.textStyle, color: cx.ink, align: textAlign, lines: 1)
+                            .frame(width: cx.inner.width, height: cx.textStyle.lineHeight)
+                    }
+                }
+                .frame(height: cx.inner.height)
             }
         }
-        .frame(width: cx.inner.width, height: cx.inner.height, alignment: Alignment(horizontal: frameAlign.horizontal, vertical: .top))
+        .frame(width: cx.inner.width, height: cx.inner.height, alignment: Alignment(horizontal: frameAlign.horizontal, vertical: .center))
         .offset(x: cx.inner.minX, y: cx.inner.minY)
     }
 
@@ -256,12 +264,18 @@ struct CodeLineLeaf: View {
     private func attributed(wraps: Bool) -> NSAttributedString {
         let out = NSMutableAttributedString()
         let language = cx.ownerProps.str("language")
+        // EXP-1555: the block's `variant` reaches the token recipe, so a
+        // destructive block (a failed call's output) paints EVERY token in
+        // its own colour, like web's `text-current` tokens.
+        var base: Props = ["language": .string(language)]
+        if let variant = cx.ownerProps["variant"] { base["variant"] = variant }
+        if let size = cx.ownerProps["size"] { base["size"] = size }
         var looks: [String: PartStyle] = [:]
         for token in cx.props.list("tokens") {
             let text = token["text"]?.string ?? ""
             if text.isEmpty { continue }
             let kind = token["kind"]?.string ?? "plain"
-            let look = looks[kind] ?? cx.model.part("CodeBlock", "token", props: ["kind": .string(kind), "language": .string(language)])
+            let look = looks[kind] ?? cx.model.part("CodeBlock", "token", props: base.merging(["kind": .string(kind)]) { $1 })
             looks[kind] = look
             var ts = SurfaceMeasurer.codeStyle(cx.textStyle)
             if let w = look.props.num("fontWeight") { ts.fontWeight = Int(w) }
