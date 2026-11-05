@@ -4,8 +4,8 @@ import ExponentialUICore
 /// VAPP-189: THE records query, the core's one evaluator
 /// (`@exponential_app/eui/host/query`, eui-core `host::query`,
 /// `fixtures/records-query.json`). A binding's URL sugar parses INTO the
-/// structured query; `RecordsQuery.value(rows:…)` evaluates it over the rows
-/// of whatever store the host has.
+/// structured query; `RecordsQuery.value(store:…)` evaluates it over a
+/// `RecordsStore`.
 public struct RecordsQuery: Sendable, Equatable {
     /// The structured query as the core spells it: `{from, app, mine, user,
     /// where, or, sort, limit, sum, month, group, aggregate, running, before}`.
@@ -60,8 +60,9 @@ public struct RecordsQuery: Sendable, Equatable {
         ExponentialUICore.dateBucket(date: date, bucket: bucket)
     }
 
-    /// The value the binding emits over `rows` (every row of the app, any
-    /// kind): `.null` without a kind, else `{rows, count, sum?, month?,
+    /// The value the binding emits over `store` (every row of the app, any
+    /// kind; VAPP-212: the rows stay in Rust, so only the query crosses the
+    /// FFI): `.null` without a kind, else `{rows, count, sum?, month?,
     /// groups?, totals?, before?}`.
     /// `me` = the viewer (nil: `mine` matches nothing), `now` = ISO 8601
     /// (the month view's default month), `names` = user id → display name.
@@ -76,14 +77,22 @@ public struct RecordsQuery: Sendable, Equatable {
     /// VAPP-222 (R6): `transitions` = the queried kind's state machine
     /// (`records.<kind>.transitions`, `.null` = none): every row carries
     /// `transitions`, the next states the viewer (`me`, `role`) may take.
-    public func value(rows: [RecordRow], me: String?, now: Date = Date(), today: String? = nil, names: [String: String] = [:], computed: [String: String] = [:], refs: JSONValue = .null, issues: [String: JSONValue] = [:], transitions: JSONValue = .null, role: String? = nil) -> JSONValue {
-        value(rows: rows, me: me, now: RecordsQuery.iso(now), today: today, names: names, computed: computed, refs: refs, issues: issues, transitions: transitions, role: role)
+    /// `overlay` = the host's unsynced writes for this one query (the store
+    /// keeps its rows).
+    public func value<Source>(store: RecordsStore<Source>, me: String?, now: Date = Date(), today: String? = nil, names: [String: String] = [:], computed: [String: String] = [:], refs: JSONValue = .null, issues: [String: JSONValue] = [:], transitions: JSONValue = .null, role: String? = nil, overlay: RecordsOverlay? = nil) -> JSONValue {
+        value(store: store, me: me, now: RecordsQuery.iso(now), today: today, names: names, computed: computed, refs: refs, issues: issues, transitions: transitions, role: role, overlay: overlay)
     }
 
-    /// `value` with `now` as ISO 8601 text.
-    public func value(rows: [RecordRow], me: String?, now: String, today: String? = nil, names: [String: String], computed: [String: String] = [:], refs: JSONValue = .null, issues: [String: JSONValue] = [:], transitions: JSONValue = .null, role: String? = nil) -> JSONValue {
-        let rowsJson = JSONValue.array(rows.map(\.json)).json
-        let context = JSONValue.object([
+    /// `value(store:…)` with `now` as ISO 8601 text.
+    public func value<Source>(store: RecordsStore<Source>, me: String?, now: String, today: String? = nil, names: [String: String] = [:], computed: [String: String] = [:], refs: JSONValue = .null, issues: [String: JSONValue] = [:], transitions: JSONValue = .null, role: String? = nil, overlay: RecordsOverlay? = nil) -> JSONValue {
+        let context = contextJson(me: me, now: now, today: today, names: names, computed: computed, refs: refs, issues: issues, transitions: transitions, role: role)
+        let overlayJson = overlay.flatMap { $0.isEmpty ? nil : $0.json }
+        guard let out = try? store.handle.valueJson(queryJson: json, contextJson: context, overlayJson: overlayJson) else { return .null }
+        return JSONValue.parse(out)
+    }
+
+    private func contextJson(me: String?, now: String, today: String?, names: [String: String], computed: [String: String], refs: JSONValue, issues: [String: JSONValue], transitions: JSONValue, role: String?) -> String {
+        JSONValue.object([
             "me": me.map(JSONValue.string) ?? .null,
             "now": .string(now),
             "today": today.map(JSONValue.string) ?? .null,
@@ -94,13 +103,6 @@ public struct RecordsQuery: Sendable, Equatable {
             "transitions": transitions,
             "role": role.map(JSONValue.string) ?? .null,
         ]).json
-        guard let out = try? recordsValueJson(rowsJson: rowsJson, queryJson: json, contextJson: context) else { return .null }
-        return JSONValue.parse(out)
-    }
-
-    /// The raw JSON value (for a host that compares emits as text).
-    public func valueJson(rows: [RecordRow], me: String?, now: String, names: [String: String]) -> String {
-        value(rows: rows, me: me, now: now, names: names).json
     }
 
     /// VAPP-214: a package's computed fields of `kind` (`records.<kind>.computed`,
@@ -165,5 +167,60 @@ public struct RecordRow: Sendable, Equatable {
             "createdAt": .string(createdAt),
             "updatedAt": .string(updatedAt),
         ])
+    }
+}
+
+private func recordsDeltaJson(upserts: [RecordRow], deletes: [String]) -> String {
+    JSONValue.object([
+        "upserts": .array(upserts.map(\.json)),
+        "deletes": .array(deletes.map(JSONValue.string)),
+    ]).json
+}
+
+/// VAPP-212: a host's unsynced writes laid over one query: `deletes` hide
+/// rows, an upsert replaces a known id in place, a new id joins the end.
+public struct RecordsOverlay: Sendable, Equatable {
+    public var upserts: [RecordRow]
+    public var deletes: [String]
+
+    public init(upserts: [RecordRow] = [], deletes: [String] = []) {
+        self.upserts = upserts
+        self.deletes = deletes
+    }
+
+    var isEmpty: Bool { upserts.isEmpty && deletes.isEmpty }
+
+    var json: String { recordsDeltaJson(upserts: upserts, deletes: deletes) }
+}
+
+/// VAPP-212: one app's rows on the Rust side, newest first (`createdAt`
+/// descending, then `id`). `sync` takes the host's synced rows as it reads
+/// them (any `Equatable` type) and pushes only what changed, so `row` runs only
+/// for new and changed ones. When several bindings share a store, call `sync`
+/// then `value(store:…)` on one actor to keep a binding's rows and value together.
+public final class RecordsStore<Source: Equatable>: @unchecked Sendable {
+    let handle = RecordStore.newestFirst()
+    private let lock = NSLock()
+    private var last: [String: Source] = [:]
+
+    public init() {}
+
+    /// How many rows the store holds.
+    public var count: Int { Int(handle.count()) }
+
+    public func sync(_ items: [Source], id: (Source) -> String, row: (Source) -> RecordRow) {
+        lock.lock()
+        defer { lock.unlock() }
+        var seen = [String: Source](minimumCapacity: items.count)
+        var upserts: [RecordRow] = []
+        for item in items {
+            let key = id(item)
+            seen[key] = item
+            if last[key] != item { upserts.append(row(item)) }
+        }
+        let deletes = last.keys.filter { seen[$0] == nil }
+        if upserts.isEmpty && deletes.isEmpty { return }
+        guard (try? handle.applyJson(deltaJson: recordsDeltaJson(upserts: upserts, deletes: deletes))) != nil else { return }
+        last = seen
     }
 }
