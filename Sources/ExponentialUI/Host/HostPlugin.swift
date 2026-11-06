@@ -101,10 +101,82 @@ public struct SurfacePaintError: Sendable, Equatable, Hashable {
 public struct TextLinkSegment: Equatable, Sendable {
     public var text: String
     public var href: String?
+    /// #VAPP-258: in a Markdown, the segment paints as an inline Chip (when
+    /// its href is allowed and the chip valid); a `hostLinks` Text paints it
+    /// as its plain link.
+    public var chip: TextLinkChip?
 
-    public init(text: String, href: String? = nil) {
+    public init(text: String, href: String? = nil, chip: TextLinkChip? = nil) {
         self.text = text
         self.href = href
+        self.chip = chip
+    }
+}
+
+/// #VAPP-258 (`catalog/host.json` markdown): a text link's inline chip:
+/// `kind` in `issue | mention | entity`, a non-empty `label`, an optional
+/// icon registry name. An unknown kind or an empty label drops the chip
+/// (the link stays).
+public struct TextLinkChip: Equatable, Sendable {
+    public var kind: String
+    public var label: String
+    public var icon: String?
+    /// #VAPP-258: an identifier (`ABC-1`) painted mono before the label.
+    public var ident: String?
+
+    public init(kind: String, label: String, icon: String? = nil, ident: String? = nil) {
+        self.kind = kind
+        self.label = label
+        self.icon = icon
+        self.ident = ident
+    }
+}
+
+/// #VAPP-258: the host's `attachment(href)` answer: `kind` in `video |
+/// audio | file`, a non-empty `name`.
+public struct MarkdownAttachmentInfo: Equatable, Sendable {
+    public var kind: String
+    public var name: String
+
+    public init(kind: String, name: String) {
+        self.kind = kind
+        self.name = name
+    }
+}
+
+/// #VAPP-258 step 5 (`catalog/host.json` markdown.options): how this host's
+/// Markdowns render; the default = what a Markdown painted before them.
+/// `hardBreaks` = `breaks: hard` (every newline inside a paragraph, list
+/// item or quote paragraph breaks the line); `chat` = `density: chat` (the
+/// `Markdown/*` recipes resolved with `density: chat`, the theme's chat
+/// rhythm); `selectable` = whether the text selects and copies (nil = no,
+/// as before: a `userSelect: text` style still opts in on macOS);
+/// `streaming` = the text is a growing prefix (its stable blocks memoized,
+/// its unfinished tail held back). Read by the measurer and the painter.
+public struct MarkdownOptions: Equatable, Sendable {
+    public var hardBreaks: Bool
+    public var chat: Bool
+    public var selectable: Bool?
+    public var streaming: Bool
+    /// #VAPP-258: a block image's height cap (pt); nil = none (the width at
+    /// the image's aspect, at most the viewport's height). Default 160.
+    public var imageMaxHeight: CGFloat?
+
+    /// catalog/host.json `markdown.imageMaxHeight`.
+    public static let defaultImageMaxHeight: CGFloat = 160
+
+    public init(hardBreaks: Bool = false, chat: Bool = false, selectable: Bool? = nil, streaming: Bool = false, imageMaxHeight: CGFloat? = MarkdownOptions.defaultImageMaxHeight) {
+        self.hardBreaks = hardBreaks
+        self.chat = chat
+        self.selectable = selectable
+        self.streaming = streaming
+        self.imageMaxHeight = imageMaxHeight
+    }
+
+    /// `imageMaxHeight` as applied: nil = none, an invalid number = the default.
+    public var imageCap: CGFloat? {
+        guard let v = imageMaxHeight else { return nil }
+        return v.isFinite && v > 0 ? v : MarkdownOptions.defaultImageMaxHeight
     }
 }
 
@@ -125,6 +197,20 @@ public protocol HostPlugin: AnyObject {
     /// segments that concatenate back to it; nil = no links. eUI knows nothing
     /// of what they mean.
     func textLinks(_ text: String) -> [TextLinkSegment]?
+    /// #VAPP-258: a Markdown block image's natural size (asked with the raw
+    /// src, by the measurer and the painter: answer purely): its box keeps
+    /// the aspect ratio. nil (or a non-positive size) = the fixed box.
+    func imageSize(_ src: String) -> CGSize?
+    /// #VAPP-258: called with the raw src when a Markdown block image is
+    /// pressed (a lightbox). nil (the default) = block images are not
+    /// pressable.
+    var onImagePress: (@MainActor (String) -> Void)? { get }
+    /// #VAPP-258: a top-level Markdown paragraph that is exactly one link
+    /// (asked with the raw destination): a video / audio / file attachment
+    /// paints the media natives' look instead. nil = a paragraph.
+    func attachment(_ href: String) -> MarkdownAttachmentInfo?
+    /// #VAPP-258 step 5: the Markdown render options (`MarkdownOptions`).
+    var markdownOptions: MarkdownOptions { get }
     /// The URL policy every href passes (Link, markdown links, openUrl).
     /// nil = the contract defaults (https, http, mailto, tel; relative urls
     /// resolve against `mediaOptions.baseUrl`, else are denied).
@@ -176,6 +262,10 @@ public extension HostPlugin {
         systemOpen(u)
     }
     func textLinks(_ text: String) -> [TextLinkSegment]? { nil }
+    func imageSize(_ src: String) -> CGSize? { nil }
+    var onImagePress: (@MainActor (String) -> Void)? { nil }
+    func attachment(_ href: String) -> MarkdownAttachmentInfo? { nil }
+    var markdownOptions: MarkdownOptions { MarkdownOptions() }
     var urlPolicy: UrlPolicy? { nil }
     var mediaOptions: MediaOptions? { nil }
     func resolveUrl(_ src: String) -> String { src }

@@ -77,6 +77,10 @@ public final class SurfaceModel {
     public private(set) var inks: [Color] = []
     public private(set) var textStyles: [Int: TextStyle] = [:]
     public private(set) var layers: [LayerInfo] = []
+    /// EXP-1676: an open Dialog's first height by owner: a lifted Dialog
+    /// holds its bottom edge from then on (`LayerStage.origin`, the core's
+    /// rule for one it places itself).
+    public private(set) var dialogHolds: [String: CGFloat] = [:]
     public private(set) var lists: [String: ListInfo] = [:]
     /// Scroll containers by slot: the core's offsets and content sizes.
     public private(set) var scrolls: [Int: ScrollInfo] = [:]
@@ -310,6 +314,18 @@ public final class SurfaceModel {
         invalidate(structure: true)
     }
 
+    /// #VAPP-258: node `index`'s content changed size outside the tree (a
+    /// Markdown block image decoded at a size the host did not know):
+    /// measure it again.
+    /// #VAPP-258: the type scale in force (Dynamic Type or the host's
+    /// `fontScale`); the core scales the node text styles by it.
+    var textScale: CGFloat { CGFloat(appliedSettings?.fontScale ?? 1) }
+
+    func remeasure(_ index: Int) {
+        guard surface.markDirty(index: UInt32(index)) else { return }
+        invalidate(structure: false)
+    }
+
     /// Something changed in the core: relayout (a pass follows at once when
     /// the width is known). `structure` = the host replaced content.
     func invalidate(structure: Bool) {
@@ -388,7 +404,9 @@ public final class SurfaceModel {
             } else {
                 let measurer = SurfaceMeasurer(theme: theme, mode: mode, extensions: extensions, kinds: kinds, generation: measureGeneration, memo: memoizeMeasures ? measureMemo : nil, mediaAllowed: { [unowned self] src in
                     MainActor.assumeIsolated { self.mediaRequest(src) != nil }
-                })
+                }, markdownBlocks: { [unowned self] text in
+                    MainActor.assumeIsolated { MarkdownPainter.painted(text, model: self) }
+                }, markdownOptions: host.markdownOptions, viewportHeight: viewportHeight > 0 ? viewportHeight : nil, fontScale: textScale)
                 out = surface.layout(measurer: measurer)
                 calls += measurer.calls
             }
@@ -455,6 +473,10 @@ public final class SurfaceModel {
         } else {
             layersSettled()
         }
+        let open = newLayers.filter { $0.modal && $0.position == "centered" && $0.frame.height > 0 }
+        var holds = dialogHolds.filter { held in open.contains { $0.owner == held.key } }
+        for l in open where holds[l.owner] == nil { holds[l.owner] = l.frame.height }
+        if holds != dialogHolds { dialogHolds = holds }
         syncToasts()
         reportUnknowns()
         echoFields()

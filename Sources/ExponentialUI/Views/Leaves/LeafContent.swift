@@ -35,6 +35,8 @@ struct LeafContent: View {
             SelectItemLeaf(cx: cx)
         case ("Text", "itemLabel"):
             MenuItemLabelLeaf(cx: cx)
+        case ("Text", "day") where owner == "DatePicker" && !n.props.str("mark").isEmpty:
+            CalendarMarkedDayLeaf(cx: cx)
         case ("Text", _):
             TextLeaf(cx: cx)
         case ("Markdown", _):
@@ -315,10 +317,14 @@ struct MarkdownLeaf: View {
         if let view = cx.model.host.markdown(text, width: cx.inner.width) {
             view.frame(width: cx.inner.width, height: cx.inner.height, alignment: .topLeading).offset(x: cx.inner.minX, y: cx.inner.minY)
         } else {
-            let styles = MarkdownPainter.styles(theme: cx.model.theme, mode: cx.model.mode, body: cx.textStyle, props: cx.props)
-            MarkdownView(text: text, width: cx.inner.width, styles: styles, ink: cx.ink, model: cx.model, props: cx.props)
+            // #VAPP-258 step 5: the host's options (the chat rhythm, selection).
+            let options = cx.model.host.markdownOptions
+            let props = MarkdownPainter.props(cx.props, chat: options.chat)
+            let styles = MarkdownPainter.imaged(MarkdownPainter.styles(theme: cx.model.theme, mode: cx.model.mode, body: cx.textStyle, props: props, fontScale: cx.model.textScale), options: options, viewport: cx.model.viewportHeight)
+            MarkdownView(text: text, width: cx.inner.width, styles: styles, ink: cx.ink, model: cx.model, props: props, node: cx.index)
                 .frame(width: cx.inner.width, height: cx.inner.height, alignment: .topLeading)
                 .clipped()
+                .markdownSelection(options.selectable, text: text, model: cx.model)
                 .offset(x: cx.inner.minX, y: cx.inner.minY)
         }
     }
@@ -396,5 +402,42 @@ struct UnknownLeaf: View {
         TextLabel(SurfaceMeasurer.unknownLabel(cx.props, cx.node.component), ts, color: color)
             .frame(width: cx.inner.width, height: cx.inner.height, alignment: .topLeading)
             .offset(x: cx.inner.minX, y: cx.inner.minY)
+    }
+}
+
+extension View {
+    /// #VAPP-258 step 5 (`markdown.options.selectable`): `true` = the text
+    /// selects natively, block by block (macOS: the labels' own selection;
+    /// iOS: `SelectableTextLabel`), `false` = never (a `userSelect: text` style
+    /// cannot opt it back in), nil = as before.
+    @ViewBuilder
+    func markdownSelection(_ selectable: Bool?, text: String, model: SurfaceModel) -> some View {
+        switch selectable {
+        case .none: self
+        case .some(false): self.transformEnvironment(\.xuiTextPaint) { $0.userSelect = "none" }
+        case .some(true):
+            // #VAPP-258: every text block selects natively (iOS: a
+            // selectable TextKit view per block; macOS: the labels).
+            self.transformEnvironment(\.xuiTextPaint) { $0.userSelect = "text" }
+        }
+    }
+}
+
+/// #VAPP-282: a marked calendar day: the day's text + its event dot (4 x 4,
+/// centred, 1 pt over the bottom; primaryForeground on the selected day;
+/// fixtures/month-grid.json).
+struct CalendarMarkedDayLeaf: View {
+    let cx: LeafContext
+
+    var body: some View {
+        let selected = cx.node.states.contains("selected")
+        let dot = (selected ? cx.themeColor("primaryForeground") : (cx.props.str("mark") == "neutral" ? cx.themeColor("mutedForeground") : cx.tone(cx.props.str("mark")))) ?? cx.themeColor("primary") ?? cx.ink
+        ZStack(alignment: .topLeading) {
+            TextLeaf(cx: cx)
+            Circle().fill(dot).frame(width: 4, height: 4)
+                .offset(x: (cx.size.width - 4) / 2, y: cx.size.height - 1 - 4)
+                .accessibilityHidden(true)
+        }
+        .frame(width: cx.size.width, height: cx.size.height, alignment: .topLeading)
     }
 }
