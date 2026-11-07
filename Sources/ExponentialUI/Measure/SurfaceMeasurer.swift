@@ -100,7 +100,7 @@ public struct LeafRequest {
         part = l.part
         props = JSONValue.parse(l.propsJson).object ?? [:]
         text = l.text
-        textStyle = TextStyle(l.textStyle, defaultFamily: defaultFamily).forPart(owner: l.ownerComponent, part: l.part)
+        textStyle = TextStyle(l.textStyle, defaultFamily: defaultFamily).forPart(owner: l.ownerComponent, part: l.part, id: l.id)
         control = ControlBox(l.control)
         lines = l.lines.map { Int($0) }
         ownerComponent = l.ownerComponent
@@ -335,7 +335,8 @@ final class SurfaceMeasurer: Measurer, @unchecked Sendable {
         case ("ZoomableImage", _): content = MeasuredContent(Self.zoomableBox(props, wrap: inner))
         // EXP-1604 (contract §4): the composition's px size, shrinking to
         // the available width, aspect kept (the core's style defaults agree).
-        case ("Motion", _): content = MeasuredContent(Self.motionBox(props, wrap: inner))
+        // Round 8: a Canvas is the Motion box (intrinsic = `size`).
+        case ("Motion", _), ("Canvas", _): content = MeasuredContent(Self.motionBox(props, wrap: inner))
         case ("AudioPlayer", _):
             let track: CGFloat = props.str("title").isEmpty ? 0 : ts.lineHeight + spacing("xs")
             let w: CGFloat
@@ -520,8 +521,11 @@ final class SurfaceMeasurer: Measurer, @unchecked Sendable {
         }
         var height = Markdown.layout(blocks, styles, width: width, text: shaper).height
         // `lines`: the first n body lines (the web's -webkit-line-clamp).
-        if let n = Self.markdownClamp(leaf.props) { height = min(height, CGFloat(n) * styles.body.lineHeight) }
-        return MeasuredContent(width, max(height, blocks.isEmpty ? 0 : styles.body.lineHeight), Self.baseline(ts))
+        // The inline profile's lines are the paragraph's (a document's: the body).
+        let line = styles.spec(of: .paragraph)
+        if let n = Self.markdownClamp(leaf.props) { height = min(height, CGFloat(n) * line.lineHeight) }
+        let lead = MarkdownPainter.inlineVariant(leaf.props) == nil ? ts : TextStyle(fontSize: line.size, fontWeight: line.weight, lineHeight: line.lineHeight, fontFamily: line.family)
+        return MeasuredContent(width, max(height, blocks.isEmpty ? 0 : line.lineHeight), Self.baseline(lead))
     }
 
     private func button(_ leaf: LeafRequest) -> MeasuredContent {
@@ -850,7 +854,8 @@ final class MeasureMemo: @unchecked Sendable {
         if leaf.component == "Extension" || leaf.component == "Markdown" { return nil }
         var k = leaf
         k.index = 0
-        k.id = ""
+        // The id-keyed tabular part (`TextStyle.forPart`) keeps its suffix.
+        k.id = leaf.id.hasSuffix(".header.value") ? ".header.value" : ""
         return k
     }
 

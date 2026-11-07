@@ -24,7 +24,8 @@ struct A11yInfo: Equatable {
     /// `slider` | `spinbutton`: increment / decrement.
     var adjustable: String?
     var autoFocus = false
-    /// A live region (`Text.live`, a Toast): reads updates.
+    /// A live region (`accessibility.live`, `Text.live`, a field message, a
+    /// Toast): reads updates; the core announces each change.
     var live = false
 
     /// The `a11y.json` role of a component's main object (cached; the core
@@ -86,7 +87,8 @@ struct A11yInfo: Equatable {
         }
         if n.part == nil {
             let main = n.macroName ?? n.component
-            if main == "Text", n.props["live"] != nil { return "status" }
+            // Round 9: a basic Text is an inline Markdown; `off` is no region.
+            if main == "Text" || main == "Markdown", n.live != nil { return "status" }
             if let r = componentRole(main), r != "none" || n.macroName != nil { return r }
             if n.component == "Box", n.macroName == nil { return nil }
         }
@@ -132,9 +134,10 @@ struct A11yInfo: Equatable {
             info.label = a.label ?? n.props.str("label")
             info.traits = .isButton
             return info
-        case ("QrCode", _), ("Motion", _):
+        case ("QrCode", _), ("Motion", _), ("Canvas", _):
             // VAPP-162, EXP-1604 (a11y.json): an img named by `label`; decorative
-            // without one; never focusable.
+            // without one; never focusable. Round 8: a Canvas too, `pointer`
+            // and `on.press` included (no button role, no focus stop).
             let name = a.label ?? n.props.str("label")
             guard !name.isEmpty else {
                 info.hidden = true
@@ -160,7 +163,7 @@ struct A11yInfo: Equatable {
         let label = Self.label(n, model: model, role: role)
         info.label = label
         info.hint = Self.hint(n, model: model)
-        info.live = n.props["live"] != nil || n.ownerComponent == "Toast"
+        info.live = n.live != nil || n.ownerComponent == "Toast"
         if let level = a.level ?? (role == "heading" ? n.props.num("level").map { Int($0) } : nil) {
             info.heading = Self.headingLevel(level)
         }
@@ -187,7 +190,9 @@ struct A11yInfo: Equatable {
             let checked = a.checked ?? (tile
                 ? model.choiceTileSelected(n.index)
                 : (n.part == nil && n.component != "Checkbox" && n.component != "Switch" ? n.checked : model.checked(n.index)))
-            values.append(checked ? "on" : "off")
+            // Round 8 (a11y.json): a mixed Checkbox reads "mixed" (wins over checked).
+            let mixed = role == "checkbox" && !tile && model.indeterminate(n.index)
+            values.append(mixed ? "mixed" : checked ? "on" : "off")
         case "progressbar", "meter", "slider":
             let now = a.valueNow ?? (role == "slider" ? model.sliderValue(n.index) : n.props.num("value"))
             let lo = a.valueMin ?? n.props.num("min") ?? 0
