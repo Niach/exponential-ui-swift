@@ -172,8 +172,12 @@ final class SurfaceMeasurer: Measurer, @unchecked Sendable {
     let viewportHeight: CGFloat?
     /// #VAPP-258: the surface's type scale (the Markdown parts the recipes size scale by it).
     let fontScale: CGFloat
+    /// #EDE-65: an Embed leaf's nested surface laid out at a content wrap
+    /// width (id, props, wrap → its size); nil = an Embed measures nothing.
+    let embedSize: ((String, Props, CGFloat?) -> CGSize)?
 
-    init(theme: ThemeHandle?, mode: Mode, extensions: ExtensionRegistry, kinds: [String: String], generation: UInt64, memo: MeasureMemo? = nil, mediaAllowed: @escaping (String) -> Bool = { _ in true }, markdownBlocks: ((String) -> [MarkdownBlock])? = nil, markdownOptions: MarkdownOptions = MarkdownOptions(), viewportHeight: CGFloat? = nil, fontScale: CGFloat = 1) {
+    init(theme: ThemeHandle?, mode: Mode, extensions: ExtensionRegistry, kinds: [String: String], generation: UInt64, memo: MeasureMemo? = nil, mediaAllowed: @escaping (String) -> Bool = { _ in true }, markdownBlocks: ((String) -> [MarkdownBlock])? = nil, markdownOptions: MarkdownOptions = MarkdownOptions(), viewportHeight: CGFloat? = nil, fontScale: CGFloat = 1, embedSize: ((String, Props, CGFloat?) -> CGSize)? = nil) {
+        self.embedSize = embedSize
         self.markdownOptions = markdownOptions
         self.fontScale = fontScale
         self.viewportHeight = viewportHeight
@@ -357,6 +361,8 @@ final class SurfaceMeasurer: Measurer, @unchecked Sendable {
         case ("QrScanner", _): content = MeasuredContent(qrScanner(leaf, wrap: inner))
         case ("Skeleton", _): content = MeasuredContent(skeleton(props, wrap: inner))
         case ("Chart", _): content = MeasuredContent(chart(leaf, wrap: inner))
+        // #EDE-65: the nested surface at the content width, as tall as it lays out.
+        case ("Embed", _): content = MeasuredContent(embedSize?(leaf.id, props, inner) ?? .zero)
         case ("Composer", _): content = MeasuredContent(composer(leaf, wrap: inner))
         case ("TreeGuides", _):
             // depth × `treeGuideColumn` wide; no height of its own (it
@@ -812,8 +818,22 @@ final class SurfaceMeasurer: Measurer, @unchecked Sendable {
     private func trigger(_ leaf: LeafRequest) -> MeasuredContent {
         let ts = leaf.textStyle
         let text = leaf.props.str("text").isEmpty ? leaf.props.str("placeholder") : leaf.props.str("text")
-        let gap = max(leaf.control.gap, spacing("sm"))
-        return MeasuredContent(line(text, ts) + gap + 16, ts.lineHeight, Self.baseline(ts))
+        guard leaf.component == "Select" else {
+            let gap = max(leaf.control.gap, spacing("sm"))
+            return MeasuredContent(line(text, ts) + gap + 16, ts.lineHeight, Self.baseline(ts))
+        }
+        // #EXP-1629: the glyph is the `chevron` part; a `row` adds its
+        // `label` before the value, the recipe `gap` apart.
+        let glyph = SelectTrigger.glyphSize(part("Select", "chevron", leaf.props))
+        guard SelectTrigger.isRow(leaf.props) else {
+            let gap = max(leaf.control.gap, spacing("sm"))
+            return MeasuredContent(line(text, ts) + gap + glyph, ts.lineHeight, Self.baseline(ts))
+        }
+        let gap = leaf.control.gap
+        let labelStyle = SelectTrigger.labelStyle(ts, part("Select", "label", leaf.props))
+        let label = SelectTrigger.label(leaf.props)
+        let labelW = label.isEmpty ? 0 : line(label, labelStyle) + gap
+        return MeasuredContent(labelW + line(text, ts) + gap + glyph, max(ts.lineHeight, label.isEmpty ? 0 : labelStyle.lineHeight), Self.baseline(ts))
     }
 
     /// The web's `<audio controls>` bar height (Chromium).
@@ -834,8 +854,9 @@ final class SurfaceMeasurer: Measurer, @unchecked Sendable {
 /// id), the theme, the mode, the measure generation and the installed
 /// fonts: a re-windowed list row, a rebound template item with a text
 /// seen before, a Table's repeated badge pay a dictionary lookup instead
-/// of TextKit. Extensions (their painter decides) and Markdown (its
-/// images pass the host's media policy) are never memoised. Cleared when
+/// of TextKit. Extensions (their painter decides), Markdown (its
+/// images pass the host's media policy) and Embed (its nested surface
+/// lays out on its own) are never memoised. Cleared when
 /// any input of the answer changes, and when it outgrows `limit`.
 final class MeasureMemo: @unchecked Sendable {
     struct HeightKey: Hashable {
@@ -851,7 +872,7 @@ final class MeasureMemo: @unchecked Sendable {
 
     /// The record as the memo keys it: slot and id dropped (nil = never memoised).
     static func key(_ leaf: FfiLeaf) -> FfiLeaf? {
-        if leaf.component == "Extension" || leaf.component == "Markdown" { return nil }
+        if leaf.component == "Extension" || leaf.component == "Markdown" || leaf.component == "Embed" { return nil }
         var k = leaf
         k.index = 0
         // The id-keyed tabular part (`TextStyle.forPart`) keeps its suffix.
@@ -870,5 +891,43 @@ final class MeasureMemo: @unchecked Sendable {
         inputs = now
         intrinsics.removeAll()
         heights.removeAll()
+    }
+}
+
+/// #EXP-1629: the Select trigger's variants, shared by the measurer and
+/// `PickerTriggerLeaf`. A `row` trigger is a Group row: [label] gap
+/// [value | placeholder, end-aligned, truncating] gap [chevron].
+enum SelectTrigger {
+    /// `triggerVariant: row` on the trigger (the core copies the owner's
+    /// props), else on its owner.
+    static func isRow(_ props: Props, owner: Props = [:]) -> Bool {
+        (props["triggerVariant"]?.string ?? owner["triggerVariant"]?.string) == "row"
+    }
+
+    /// The row's leading text: the trigger's `label`, else its owner's.
+    static func label(_ props: Props, owner: Props = [:]) -> String {
+        props.str("label").isEmpty ? owner.str("label") : props.str("label")
+    }
+
+    /// A glyph part's side (`width`, else `height`; 16 when the recipe is silent).
+    static func glyphSize(_ look: PartStyle) -> CGFloat {
+        look.width ?? look.height ?? 16
+    }
+
+    /// The label in the trigger's text style with the `label` part's face.
+    static func labelStyle(_ ts: TextStyle, _ look: PartStyle) -> TextStyle {
+        var s = ts
+        if let w = look.style.fontWeight { s.fontWeight = w }
+        if let f = look.style.fontSize { s.fontSize = f }
+        if let l = look.style.lineHeight { s.lineHeight = l }
+        return s
+    }
+
+    /// The label's and the value's widths inside `width`: the label keeps
+    /// its line, the value takes what is left (it truncates).
+    static func rowWidths(label: String, labelStyle: TextStyle, value: String, valueStyle: TextStyle, gap: CGFloat, glyph: CGFloat, width: CGFloat) -> (label: CGFloat, value: CGFloat) {
+        let l = min(TextShaper.maxContent(labelStyle.shown(label), labelStyle), max(0, width - glyph - gap))
+        let v = min(TextShaper.maxContent(valueStyle.shown(value), valueStyle), max(0, width - l - glyph - gap * 2))
+        return (l, v)
     }
 }

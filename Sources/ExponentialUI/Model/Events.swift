@@ -134,6 +134,8 @@ extension SurfaceModel {
         default:
             if n.isTextField { return }
         }
+        // #EXP-1629: a press elsewhere takes the focus from a recording KeyRecorder.
+        keyRecorderBlurOthers(pressing: index)
         // EXP-1605: a Motion's state machine gets the click first.
         motionDrivers[n.id]?.post("click")
         fire(index, "press")
@@ -198,11 +200,27 @@ extension SurfaceModel {
     /// closes the overlay from the states (`hoverTimer` closes it late).
     public func setHover(id: String, _ hovered: Bool) {
         if hovered { pointerSeen() }
+        // #EXP-1629: the pointer moves a Select's cursor (one highlight;
+        // leaving keeps it where it is).
+        if let i = byId[id], nodes[i].part == "item", nodes[i].ownerComponent == "Select", let owner = nodes[i].owner {
+            if hovered && !isDisabled(i) { moveSelectCursor(owner, to: i) }
+            return
+        }
         if let i = byId[id], let target = nodes[i].triggerFor, opensOnHover(target) {
             hoverTrigger(id, target: target, hovered)
             return
         }
         setInteraction(id) { $0.hover = hovered }
+    }
+
+    /// #EDE-65: the pointer entered a Box: its `on.hover` fires, exactly
+    /// like a Motion's (no payload); leaving fires nothing. Pressable or
+    /// not; nothing without a handler.
+    public func boxHover(id: String, _ inside: Bool) {
+        guard inside, let i = byId[id], let n = node(i), n.component == "Box", n.part == nil else { return }
+        pointerSeen()
+        guard let events = try? surface.event(index: UInt32(i), name: "hover", payloadJson: nil), !events.isEmpty else { return }
+        dispatch(events)
     }
 
     /// A drag with files over a FileUpload drop zone (`dragover`).
@@ -343,6 +361,8 @@ extension SurfaceModel {
             if inside { target = layerReturn[o] }
         }
         openLayerKeys = now
+        for o in closed { selectClosed(o) }
+        for l in opened where node(id: l.owner)?.component == "Select" { selectOpened(l.owner) }
         let open = Set(layers.map(\.owner))
         for owner in Array(layerReturn.keys) where !open.contains(owner) {
             layerReturn[owner] = nil
@@ -593,8 +613,9 @@ extension SurfaceModel {
         }
         if surface.scrollTo(id: n.id, x: Float(offset.x), y: Float(offset.y)) {
             layoutNeeded = true
-            // An anchored layer inside the container follows it now, and so
-            // does a `position: sticky` node (VAPP-250).
+            // An anchored layer inside the container closes (#EXP-1739: the
+            // core raises it during the pass) and a `position: sticky` node
+            // follows it (VAPP-250).
             if !layers.isEmpty || hasStickyNodes { pass() }
         }
     }
@@ -701,6 +722,62 @@ extension SurfaceModel {
     /// direction): the core previews the order and fires `reorder`.
     public func tabDrag(_ index: Int, phase: String, delta: CGFloat) {
         fire(index, "drag", payload: .object(["phase": .string(phase), "delta": .number(Double(delta))]))
+    }
+
+    /// FEED-200: the `content` part of a `swipeable` Tabs (its panels page
+    /// under a horizontal touch drag).
+    public func isSwipeContent(_ index: Int) -> Bool {
+        guard let n = node(index), n.ownerComponent == "Tabs", n.part == "content" else { return false }
+        return ownerProps(index)["swipeable"]?.bool == true
+    }
+
+    /// FEED-200: a swipeable Tabs' swipe (`phase` = start | move | end |
+    /// cancel, `offset` = SCREEN pt since the touch started, positive =
+    /// rightwards, never mirrored; `velocity` = pt/ms at the release). The
+    /// core draws the pages and the `thumb` and settles (`fixtures/swipe.json`).
+    public func tabSwipe(_ index: Int, phase: String, offset: CGFloat, velocity: CGFloat = 0) {
+        fire(index, "swipe", payload: .object(["phase": .string(phase), "offset": .number(Double(offset)), "velocity": .number(Double(velocity))]))
+    }
+
+    /// FEED-200: the axis a touch that moved (`dx`, `dy`) commits to
+    /// (`pending` | `horizontal` | `vertical`, the core's `swipeLock`).
+    public func swipeAxis(dx: CGFloat, dy: CGFloat) -> String {
+        ExponentialUICore.swipeLock(dx: Double(dx), dy: Double(dy))
+    }
+
+    /// FEED-200: does node `index` pan by itself (`swipeBlocks` of its
+    /// component, `direction` prop and resolved `overflowX`)?
+    func swipeBlocker(_ index: Int) -> Bool {
+        guard let n = node(index) else { return false }
+        let s = style(index)
+        let scrollsX = s.scrollX || scroll(index)?.scrollsX == true
+        let overflowX: String? = scrollsX ? "auto" : (s.clipX ? "hidden" : nil)
+        return ExponentialUICore.swipeBlocks(component: n.component, direction: n.props["direction"]?.string, overflowX: overflowX)
+    }
+
+    /// FEED-200: is a touch starting at `point` (surface coordinates,
+    /// unscrolled like `frame`) inside swipeable content `content` the
+    /// touch of a node that scrolls, pans or drags sideways? Walks from the
+    /// deepest hit node (topmost in paint order, skipping hidden,
+    /// `pointerEvents: none` and invisible boxes, through scroll offsets)
+    /// up to the content.
+    public func swipeBlocked(_ content: Int, at point: CGPoint) -> Bool {
+        var at = content
+        var p = point
+        var path: [Int] = []
+        while path.count < 512 {
+            if let s = scroll(at) { p = CGPoint(x: p.x + s.offset.x, y: p.y + s.offset.y) }
+            let layer = node(at)?.layer
+            let hit = (children[safe: at] ?? []).reversed().first { k in
+                guard let n = node(k), !n.hidden, n.layer == layer else { return false }
+                let s = style(k)
+                return !s.pointerNone && !s.invisible && frame(k).contains(p)
+            }
+            guard let hit else { break }
+            path.append(hit)
+            at = hit
+        }
+        return path.contains { swipeBlocker($0) }
     }
 
     /// A key on a node the core handles itself (a Resizable handle: the
