@@ -27,8 +27,23 @@ struct OwnedTextField {
     /// The owner Input's `type` (catalog enum `inputType`; "" = not an
     /// Input): keyboard, masking, autofill and autocorrection.
     let inputType: String
+    /// #EXP-1629: the one-line text's (and placeholder's) alignment; a
+    /// `row` Input ends its value (`.natural` = the platform default).
+    var textAlignment: NSTextAlignment = .natural
 
     var secure: Bool { inputType == "password" }
+
+    /// The placeholder's attributes: its colour and font, plus the field's
+    /// alignment when it is not the default.
+    var placeholderAttributes: [NSAttributedString.Key: Any] {
+        var attrs: [NSAttributedString.Key: Any] = [.foregroundColor: placeholderColor, .font: font]
+        if textAlignment != .natural {
+            let p = NSMutableParagraphStyle()
+            p.alignment = textAlignment
+            attrs[.paragraphStyle] = p
+        }
+        return attrs
+    }
 }
 
 /// What an Input `type` asks of the platform field (Compose `keyboardTypeOf`
@@ -91,6 +106,10 @@ extension OwnedTextField {
 
     /// #EDE-65: a Composer key for the host's menu (`menuKeys`): `true` = taken.
     func menuKey(_ name: String, modified: Bool, composing: Bool) -> Bool { model.composerKey(index, key: name, modified: modified, composing: composing) }
+
+    /// #EDE-65 R: a paste into a Composer: `true` = taken (its files went to
+    /// `attach`; the field inserts nothing).
+    func paste() -> Bool { model.composerPaste(index, files: ComposerPasteboard.files()) }
 }
 
 #if canImport(UIKit)
@@ -174,7 +193,8 @@ extension OwnedTextField: UIViewRepresentable {
             field.tintColor = color
             field.isEnabled = !disabled
             field.accessibilityLabel = accessibilityLabel
-            field.attributedPlaceholder = NSAttributedString(string: placeholder, attributes: [.foregroundColor: placeholderColor, .font: font])
+            field.textAlignment = textAlignment
+            field.attributedPlaceholder = NSAttributedString(string: placeholder, attributes: placeholderAttributes)
             Self.apply(InputTraits(type: inputType, kind: kind), to: field)
             let coordinator = context.coordinator
             field.onKey = { name, shift in coordinator.parent.key(name, shift: shift) }
@@ -186,6 +206,7 @@ extension OwnedTextField: UIViewRepresentable {
         } else if let tv = view as? PlaceholderTextView {
             let coordinator = context.coordinator
             tv.onMenuKey = submitsOnReturn ? { name, modified, composing in coordinator.parent.menuKey(name, modified: modified, composing: composing) } : nil
+            tv.onPaste = submitsOnReturn ? { coordinator.parent.paste() } : nil
             tv.font = font
             tv.textColor = color
             tv.tintColor = color
@@ -274,6 +295,19 @@ extension OwnedTextField: UIViewRepresentable {
     final class PlaceholderTextView: UITextView {
         let placeholderLabel = UILabel()
         var onMenuKey: ((String, Bool, Bool) -> Bool)?
+        /// #EDE-65 R: a Composer's paste: `true` = taken (composerPaste).
+        var onPaste: (() -> Bool)?
+
+        override func paste(_ sender: Any?) {
+            if onPaste?() == true { return }
+            super.paste(sender)
+        }
+
+        override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
+            // UITextView offers Paste for text only; a Composer takes images.
+            if action == #selector(paste(_:)), onPaste != nil, isEditable, ComposerPasteboard.hasFiles() { return true }
+            return super.canPerformAction(action, withSender: sender)
+        }
 
         override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
             if let onMenuKey {
@@ -444,7 +478,8 @@ extension OwnedTextField: NSViewRepresentable {
             field.isEnabled = !disabled
             (field as? CenteredTextField)?.selectsOnPress = InputTraits(type: inputType, kind: kind).selectsOnFocus
             field.setAccessibilityLabel(accessibilityLabel)
-            field.placeholderAttributedString = NSAttributedString(string: placeholder, attributes: [.foregroundColor: placeholderColor, .font: font])
+            field.alignment = textAlignment
+            field.placeholderAttributedString = NSAttributedString(string: placeholder, attributes: placeholderAttributes)
             if wantsWrite, field.stringValue != text {
                 field.stringValue = text
                 // A model write (an echo, an action's `set`) leaves the cursor at the END.
@@ -459,6 +494,8 @@ extension OwnedTextField: NSViewRepresentable {
                 tv.setSelectedRange(NSRange(location: (text as NSString).length, length: 0))
             }
             if let ptv = tv as? PlaceholderTextView {
+                let coordinator = context.coordinator
+                ptv.onPaste = submitsOnReturn ? { coordinator.parent.paste() } : nil
                 ptv.placeholder = placeholder.isEmpty ? nil : NSAttributedString(string: placeholder, attributes: [.foregroundColor: placeholderColor, .font: font])
                 ptv.placeholderLineHeight = lineHeight
             }
@@ -482,6 +519,14 @@ extension OwnedTextField: NSViewRepresentable {
     /// the text, centred in one `placeholderLineHeight` line (the iOS
     /// `PlaceholderTextView` label's frame).
     final class PlaceholderTextView: NSTextView {
+        /// #EDE-65 R: a Composer's paste: `true` = taken (composerPaste).
+        var onPaste: (() -> Bool)?
+
+        override func paste(_ sender: Any?) {
+            if onPaste?() == true { return }
+            super.paste(sender)
+        }
+
         var placeholder: NSAttributedString? { didSet { if placeholder != oldValue { needsDisplay = true } } }
         var placeholderLineHeight: CGFloat = 0 { didSet { if placeholderLineHeight != oldValue { needsDisplay = true } } }
 

@@ -3715,6 +3715,14 @@ public protocol SurfaceProtocol: AnyObject, Sendable {
      */
     func setPointer(hover: Bool, reducedMotion: Bool) 
     
+    /**
+     * #EXP-1629: where anchored popups (Popover, Menu, the pickers) may
+     * go, in SURFACE coordinates: the host's window around the surface (a
+     * popup that does not fit is fitted into it, not into the surface).
+     * Width or height <= 0 = unset, the default: the surface's own view.
+     */
+    func setPopupBounds(x: Float, y: Float, width: Float, height: Float)  -> Bool
+    
     func setPressed(ids: [String])  -> Bool
     
     /**
@@ -4525,6 +4533,25 @@ open func setPointer(hover: Bool, reducedMotion: Bool)  {try! rustCall() {
         FfiConverterBool.lower(reducedMotion),uniffiCallStatus
     )
 }
+}
+    
+    /**
+     * #EXP-1629: where anchored popups (Popover, Menu, the pickers) may
+     * go, in SURFACE coordinates: the host's window around the surface (a
+     * popup that does not fit is fitted into it, not into the surface).
+     * Width or height <= 0 = unset, the default: the surface's own view.
+     */
+open func setPopupBounds(x: Float, y: Float, width: Float, height: Float) -> Bool  {
+    return try!  FfiConverterBool.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_exponential_ui_ffi_fn_method_surface_set_popup_bounds(
+            self.uniffiCloneHandle(),
+        FfiConverterFloat.lower(x),
+        FfiConverterFloat.lower(y),
+        FfiConverterFloat.lower(width),
+        FfiConverterFloat.lower(height),uniffiCallStatus
+    )
+})
 }
     
 open func setPressed(ids: [String]) -> Bool  {
@@ -7161,6 +7188,11 @@ public struct FfiVisual: Equatable, Hashable {
      * Round 2: `position: sticky` (offsets: `FfiLayout.sticky`).
      */
     public var sticky: Bool
+    /**
+     * #EXP-1629: `padding-box` = the background paints inside the border
+     * (a recipe's `backgroundClip`); `None` = under it (`border-box`).
+     */
+    public var backgroundClip: String?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
@@ -7213,7 +7245,11 @@ public struct FfiVisual: Equatable, Hashable {
          */animationJson: String? = nil, 
         /**
          * Round 2: `position: sticky` (offsets: `FfiLayout.sticky`).
-         */sticky: Bool = false) {
+         */sticky: Bool = false, 
+        /**
+         * #EXP-1629: `padding-box` = the background paints inside the border
+         * (a recipe's `backgroundClip`); `None` = under it (`border-box`).
+         */backgroundClip: String? = nil) {
         self.backgroundColor = backgroundColor
         self.color = color
         self.borderWidth = borderWidth
@@ -7255,6 +7291,7 @@ public struct FfiVisual: Equatable, Hashable {
         self.backdropBlur = backdropBlur
         self.animationJson = animationJson
         self.sticky = sticky
+        self.backgroundClip = backgroundClip
     }
 
     
@@ -7313,7 +7350,8 @@ public struct FfiConverterTypeFfiVisual: FfiConverterRustBuffer {
                 direction: FfiConverterOptionString.read(from: &buf), 
                 backdropBlur: FfiConverterOptionFloat.read(from: &buf), 
                 animationJson: FfiConverterOptionString.read(from: &buf), 
-                sticky: FfiConverterBool.read(from: &buf)
+                sticky: FfiConverterBool.read(from: &buf), 
+                backgroundClip: FfiConverterOptionString.read(from: &buf)
         )
     }
 
@@ -7359,6 +7397,7 @@ public struct FfiConverterTypeFfiVisual: FfiConverterRustBuffer {
         FfiConverterOptionFloat.write(value.backdropBlur, into: &buf)
         FfiConverterOptionString.write(value.animationJson, into: &buf)
         FfiConverterBool.write(value.sticky, into: &buf)
+        FfiConverterOptionString.write(value.backgroundClip, into: &buf)
     }
 }
 
@@ -10467,6 +10506,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_exponential_ui_ffi_checksum_method_surface_set_pointer() != 33301) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_exponential_ui_ffi_checksum_method_surface_set_popup_bounds() != 12485) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_exponential_ui_ffi_checksum_method_surface_set_pressed() != 58518) {

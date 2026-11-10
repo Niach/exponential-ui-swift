@@ -136,6 +136,9 @@ public final class SurfaceModel {
     @ObservationIgnored private var viewportBeforeOverlay: CGFloat?
     /// #VAPP-253: while lifted layers are up, the stage they hang from.
     @ObservationIgnored private var layerViewport: CGSize?
+    /// #EXP-1629: the window around the surface, in surface coordinates:
+    /// anchored popups fit into it (web, gpui), not into the surface.
+    @ObservationIgnored private var popupWindow: CGRect?
     @ObservationIgnored public internal(set) var maxHeight: CGFloat?
     @ObservationIgnored var nodesDirty = true
     @ObservationIgnored var visualsDirty = true
@@ -161,6 +164,9 @@ public final class SurfaceModel {
     @ObservationIgnored var layerReturn: [String: String] = [:]
     /// #EXP-1629: the option under each open Select's cursor (by owner id).
     @ObservationIgnored var selectCursor: [String: String] = [:]
+    /// #EXP-1765: the open `pill` Select popups the POINTER opened that show
+    /// no cursor yet (owner ids).
+    @ObservationIgnored var selectCursorless: Set<String> = []
     @ObservationIgnored var openLayerKeys: [String] = []
     @ObservationIgnored var justDismissed: String?
     @ObservationIgnored var hoverDelay: Task<Void, Never>?
@@ -402,6 +408,15 @@ public final class SurfaceModel {
         overlayViewportHeight(size?.height)
     }
 
+    /// #EXP-1629: the window around the surface (surface coordinates; nil =
+    /// the surface's own view). Kept for the next pass, which it only forces
+    /// while a layer is open (a scroll moves it on every frame).
+    func setPopupWindow(_ rect: CGRect?) {
+        guard rect != popupWindow else { return }
+        popupWindow = rect
+        if !layers.isEmpty, width > 0 { pass() }
+    }
+
     // MARK: - The pass
 
     /// Run one layout pass (the core, the measurer, the caches), then the
@@ -413,6 +428,7 @@ public final class SurfaceModel {
         let t0 = DispatchTime.now().uptimeNanoseconds
         _ = surface.setViewport(width: Float(width), height: Float(viewportHeight), maxHeight: maxHeight.map { Float($0) })
         _ = surface.setLayerViewport(width: Float(layerViewport?.width ?? 0), height: Float(layerViewport?.height ?? 0))
+        _ = surface.setPopupBounds(x: Float(popupWindow?.minX ?? 0), y: Float(popupWindow?.minY ?? 0), width: Float(popupWindow?.width ?? 0), height: Float(popupWindow?.height ?? 0))
         var changed = Set<Int>()
         var calls = 0
         var layoutNs: UInt64 = 0
@@ -780,8 +796,10 @@ public final class SurfaceModel {
     /// Is a node (or its owner, label parts aside) disabled?
     func isDisabled(_ index: Int) -> Bool {
         guard let n = node(index) else { return true }
-        if n.disabled || n.props.flag("loading") { return true }
-        if n.part != "label", let o = owner(of: index), o.index != n.index, o.disabled || o.props.flag("loading") { return true }
+        // #EXP-1765: a `loading` Select stays live (its popup shows the
+        // skeleton rows while the options load); `loading` freezes the rest.
+        if n.disabled || (n.props.flag("loading") && n.component != "Select") { return true }
+        if n.part != "label", let o = owner(of: index), o.index != n.index, o.disabled || (o.props.flag("loading") && o.component != "Select") { return true }
         return false
     }
 

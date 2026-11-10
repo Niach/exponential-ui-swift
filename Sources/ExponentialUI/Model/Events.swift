@@ -210,6 +210,14 @@ extension SurfaceModel {
             hoverTrigger(id, target: target, hovered)
             return
         }
+        // #EXP-1629: a row Select's value button lends its `hover` to the
+        // value/placeholder/chevron inside it; theirs alone is never reported.
+        if let i = byId[id], nodes[i].ownerComponent == "Select" {
+            if ["value", "placeholder", "chevron"].contains(nodes[i].part ?? ""), let p = nodes[i].parent, nodes[p].part == "button" { return }
+            if nodes[i].part == "button" {
+                for c in nodes[i].children { setInteraction(nodes[c].id) { $0.hover = hovered } }
+            }
+        }
         setInteraction(id) { $0.hover = hovered }
     }
 
@@ -356,6 +364,15 @@ extension SurfaceModel {
             let selected = candidates.first { i in node(i).map { $0.selected && !$0.isTextField } ?? false }
             let first = candidates.first { i in !(node(i)?.isTextField ?? true) }
             target = (autoTarget ?? selected ?? first).flatMap { node($0)?.id }
+            // #EXP-1629: a Select opens as the IDE's picker: the cursor on
+            // the FIRST enabled option, focus in its search field (if any),
+            // else on that option.
+            if node(id: top.owner)?.component == "Select" {
+                let field = candidates.first { i in node(i).map { $0.ownerComponent == "Select" && $0.part == "search" } ?? false }
+                let option = selectItems(top.owner).first { !isDisabled($0) }
+                // #EXP-1765: a pointer-opened pill has no cursor to focus.
+                target = (field ?? (selectOpensCursorless(top.owner) ? nil : option)).flatMap { node($0)?.id }
+            }
         } else if let o = closed.last {
             let inside = focusedId.flatMap { node(id: $0) }.map { $0.layer > 0 } ?? true
             if inside { target = layerReturn[o] }
@@ -890,6 +907,24 @@ extension SurfaceModel {
         let owner = node(id: dropzoneId)?.owner ?? dropzoneId
         setDragover(id: dropzoneId, false)
         filesPicked(componentId: owner, urls: urls)
+    }
+
+    /// #EDE-65 R (interactions-round1.json composerPaste): a paste into
+    /// Composer `index` carrying `files` (read off the pasteboard,
+    /// `ComposerPasteboard`): the images (`image/*`, pasteboard order) go to
+    /// the host's `onUpload` (`name` = the Composer's id) and fire `attach`
+    /// {files: [{name, size, type}]}. `true` = taken (files present: the
+    /// field inserts nothing, also when none is an image); `false` = no
+    /// files, the field's own paste.
+    @discardableResult
+    public func composerPaste(_ index: Int, files: [SurfaceUploadFile]) -> Bool {
+        guard !files.isEmpty else { return false }
+        let images = files.filter { $0.type.hasPrefix("image/") }
+        guard !images.isEmpty, let n = node(index), n.component == "Composer" else { return true }
+        host.onUpload(SurfaceUploadEvent(surfaceId: id, componentId: n.id, name: n.id, files: images))
+        let meta: [JSONValue] = images.map { .object(["name": .string($0.name), "size": .number(Double($0.size)), "type": .string($0.type)]) }
+        fire(index, "attach", payload: .object(["files": .array(meta)]))
+        return true
     }
 
     /// The UTTypes a FileUpload's `accept` allows (`image/*`, `.pdf`…; empty = any).

@@ -294,7 +294,9 @@ final class SurfaceMeasurer: Measurer, @unchecked Sendable {
             content = trigger(leaf)
         case ("Text", let part):
             let count = props["count"].map(\.displayText) ?? ""
-            let countW = count.isEmpty ? 0 : line(count, ts)
+            // #EXP-1765: a mono Select option's `trailing` (the surface's sans type) counts like a count.
+            let trailing = props["trailing"].map(\.displayText) ?? ""
+            let countW = !count.isEmpty ? line(count, ts) : (trailing.isEmpty ? 0 : line(trailing, SelectTrigger.trailingStyle(ts, sans: theme?.sansFamily)))
             // The core names the owner (`FfiLeaf.ownerComponent`, round 2); the
             // part-name guess stays for an owner this table does not know.
             let owner = leaf.ownerComponent.flatMap { Self.chromeOwners.contains($0) ? $0 : nil } ?? Self.textOwner(part, props)
@@ -380,6 +382,13 @@ final class SurfaceMeasurer: Measurer, @unchecked Sendable {
             let dot = recipe.width ?? 8
             let gap = spacing("xs")
             content = MeasuredContent(n * dot + max(n - 1, 0) * gap, recipe.height ?? dot)
+        case ("Input", "field") where InputRow.isRow(props):
+            // #EXP-1629: a `row` field leads with its `label` part, the
+            // recipe `gap` before the 160 px value.
+            let labelStyle = InputRow.labelStyle(ts, part("Input", "label", props))
+            let label = props.str("label")
+            let labelW = label.isEmpty ? 0 : line(label, labelStyle) + leaf.control.gap
+            content = MeasuredContent(labelW + 160, max(ts.lineHeight, label.isEmpty ? 0 : labelStyle.lineHeight), Self.baseline(ts))
         case ("Input", "field"):
             content = MeasuredContent(160, ts.lineHeight, Self.baseline(ts))
         case ("Textarea", "field"):
@@ -475,7 +484,8 @@ final class SurfaceMeasurer: Measurer, @unchecked Sendable {
         case ("Tabs", "tab"): return (has(props, "icon") ? 16 + xs : 0, has(props, "count") ? xs + countWidth : 0)
         // Round 2 §7: the count is its own muted part after the title.
         case ("Accordion", "trigger"): return (0, (has(props, "count") ? 8 + countWidth : 0) + 16 + max(gap, 8))
-        case ("Select", "item"): return (icon("icon"), 16 + max(gap, 8))
+        // #EXP-1765: a mono option's `trailing` (`countWidth`) sits before the check slot.
+        case ("Select", "item"): return (icon("icon"), 16 + max(gap, 8) + (has(props, "trailing") ? SelectTrigger.trailingGap(gap) + countWidth : 0))
         case ("Menu", "itemLabel"): return (icon("icon"), 0)
         case ("Table", "headerCell"): return (0, has(props, "sortIcon") || props.flag("sortable") ? 16 + 4 : 0)
         default: return (0, 0)
@@ -822,18 +832,12 @@ final class SurfaceMeasurer: Measurer, @unchecked Sendable {
             let gap = max(leaf.control.gap, spacing("sm"))
             return MeasuredContent(line(text, ts) + gap + 16, ts.lineHeight, Self.baseline(ts))
         }
-        // #EXP-1629: the glyph is the `chevron` part; a `row` adds its
-        // `label` before the value, the recipe `gap` apart.
+        // #EXP-1629: the glyph is the `chevron` part (a `row` trigger is a
+        // container of parts, measured as its nodes).
         let glyph = SelectTrigger.glyphSize(part("Select", "chevron", leaf.props))
-        guard SelectTrigger.isRow(leaf.props) else {
-            let gap = max(leaf.control.gap, spacing("sm"))
-            return MeasuredContent(line(text, ts) + gap + glyph, ts.lineHeight, Self.baseline(ts))
-        }
-        let gap = leaf.control.gap
-        let labelStyle = SelectTrigger.labelStyle(ts, part("Select", "label", leaf.props))
-        let label = SelectTrigger.label(leaf.props)
-        let labelW = label.isEmpty ? 0 : line(label, labelStyle) + gap
-        return MeasuredContent(labelW + line(text, ts) + gap + glyph, max(ts.lineHeight, label.isEmpty ? 0 : labelStyle.lineHeight), Self.baseline(ts))
+        // #EXP-1765: a pill's text and glyph sit its recipe `gap` apart.
+        let gap = SelectTrigger.isPill(leaf.props) ? SelectTrigger.pillGap(leaf.control.gap, sm: spacing("sm")) : max(leaf.control.gap, spacing("sm"))
+        return MeasuredContent(line(text, ts) + gap + glyph, ts.lineHeight, Self.baseline(ts))
     }
 
     /// The web's `<audio controls>` bar height (Chromium).
@@ -894,27 +898,58 @@ final class MeasureMemo: @unchecked Sendable {
     }
 }
 
-/// #EXP-1629: the Select trigger's variants, shared by the measurer and
-/// `PickerTriggerLeaf`. A `row` trigger is a Group row: [label] gap
-/// [value | placeholder, end-aligned, truncating] gap [chevron].
+/// #EXP-1629: the Select trigger's glyph, shared by the measurer and
+/// `PickerTriggerLeaf` (a `row` trigger is the core's container of parts).
 enum SelectTrigger {
-    /// `triggerVariant: row` on the trigger (the core copies the owner's
-    /// props), else on its owner.
-    static func isRow(_ props: Props, owner: Props = [:]) -> Bool {
-        (props["triggerVariant"]?.string ?? owner["triggerVariant"]?.string) == "row"
-    }
-
-    /// The row's leading text: the trigger's `label`, else its owner's.
-    static func label(_ props: Props, owner: Props = [:]) -> String {
-        props.str("label").isEmpty ? owner.str("label") : props.str("label")
-    }
-
     /// A glyph part's side (`width`, else `height`; 16 when the recipe is silent).
     static func glyphSize(_ look: PartStyle) -> CGFloat {
         look.width ?? look.height ?? 16
     }
 
-    /// The label in the trigger's text style with the `label` part's face.
+    /// #EXP-1765: `triggerVariant: pill` on the trigger (the core copies the
+    /// owner's props), else on its owner.
+    static func isPill(_ props: Props, owner: Props = [:]) -> Bool {
+        (props["triggerVariant"]?.string ?? owner["triggerVariant"]?.string) == "pill"
+    }
+
+    /// #EXP-1765: a pill's text-to-glyph gap: the recipe's, else `$spacing.sm`
+    /// (gpui `select_trigger`).
+    static func pillGap(_ recipeGap: CGFloat, sm: CGFloat) -> CGFloat {
+        recipeGap > 0 ? recipeGap : sm
+    }
+
+    /// #EXP-1765: the gap between a mono option's label and its `trailing`
+    /// (the item recipe's, at least 4; the measurer's `textChrome`).
+    static func trailingGap(_ recipeGap: CGFloat) -> CGFloat { max(recipeGap, 4) }
+
+    /// #EXP-1765: a mono option's `trailing` type: the item's size in the
+    /// theme's sans family (gpui `self.fonts.default`).
+    static func trailingStyle(_ ts: TextStyle, sans: String?) -> TextStyle {
+        var t = ts
+        t.fontFamily = sans
+        return t
+    }
+
+    /// #EXP-1765: the clear button's box over its glyph (a pill search's).
+    static let clearBox: CGFloat = 1.25
+    /// #EXP-1765: the clear glyph over the `searchIcon` size (centred in its box).
+    static let clearGlyph: CGFloat = 0.75
+
+}
+
+/// #EXP-1629: an Input `variant: row` field, shared by the measurer and
+/// `TextFieldLeaf`: a Group row [label, fixed] gap [the text field filling
+/// the rest, end-aligned, the typed text at 70% of the field's colour].
+enum InputRow {
+    /// The typed text's share of the field colour (the Group row's value tone).
+    static let valueOpacity: CGFloat = 0.7
+
+    /// `variant: row` on the field (the core copies the owner's props).
+    static func isRow(_ props: Props) -> Bool {
+        props["variant"]?.string == "row"
+    }
+
+    /// The label in the field's text style with the `label` part's face.
     static func labelStyle(_ ts: TextStyle, _ look: PartStyle) -> TextStyle {
         var s = ts
         if let w = look.style.fontWeight { s.fontWeight = w }
@@ -923,11 +958,9 @@ enum SelectTrigger {
         return s
     }
 
-    /// The label's and the value's widths inside `width`: the label keeps
-    /// its line, the value takes what is left (it truncates).
-    static func rowWidths(label: String, labelStyle: TextStyle, value: String, valueStyle: TextStyle, gap: CGFloat, glyph: CGFloat, width: CGFloat) -> (label: CGFloat, value: CGFloat) {
-        let l = min(TextShaper.maxContent(labelStyle.shown(label), labelStyle), max(0, width - glyph - gap))
-        let v = min(TextShaper.maxContent(valueStyle.shown(value), valueStyle), max(0, width - l - glyph - gap * 2))
-        return (l, v)
+    /// The label's width inside `width`: its whole line (it never shrinks),
+    /// at most the row.
+    static func labelWidth(_ label: String, _ style: TextStyle, width: CGFloat) -> CGFloat {
+        label.isEmpty ? 0 : min(TextShaper.maxContent(style.shown(label), style), max(0, width))
     }
 }

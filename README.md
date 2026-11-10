@@ -1,4 +1,4 @@
-# ExponentialUI 0.20.0
+# ExponentialUI 0.21.0
 
 The SwiftUI renderer of the Exponential UI SDK: A2UI surfaces streamed from
 any server, painted natively on iOS 17+ and macOS 14+ at the frames the Rust
@@ -7,7 +7,7 @@ core computes. Docs, the catalog, themes and the host API:
 
 ```swift
 // Package.swift
-.package(url: "<this repository>", from: "0.20.0")
+.package(url: "<this repository>", from: "0.21.0")
 // target
 .product(name: "ExponentialUI", package: "exponential-ui-swift")
 ```
